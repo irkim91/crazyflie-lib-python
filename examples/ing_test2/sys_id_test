@@ -1,0 +1,247 @@
+"""
+Simple example that connects to the first Crazyflie found, ramps up/down
+the motors and disconnects.
+"""
+import logging
+import time
+from threading import Thread
+
+import numpy as np
+from scipy.integrate import cumtrapz
+
+import cflib
+from cflib.crazyflie import Crazyflie
+from cflib.crazyflie.log import LogConfig
+from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
+from cflib.crazyflie.syncLogger import SyncLogger
+from cflib.utils import uri_helper
+
+uri = uri_helper.uri_from_env(default='radio://0/80/2M/E7E7E7E7E7')
+
+# Only output errors from the logging framework
+logging.basicConfig(level=logging.ERROR)
+
+def activate_complementary_estimator(cf):
+    cf.param.set_value('stabilizer.estimator', '1')
+    print('complementary estimator selected')
+
+def activate_PID_controller(cf):
+    cf.param.set_value('stabilizer.controller', '1')
+    print('PID controller selected')
+
+def set_Flapper(cf):
+
+    # Thrust value
+    #cf.param.set_value('posCtlPid.thrustBase','32000')
+    cf.param.set_value('posCtlPid.thrustBase','0')
+
+    #cf.param.set_value('flapper.servPitchNeutr','45')
+    #cf.param.set_value('flapper.servYawNeutr','58')
+    cf.param.set_value('flapper.servPitchNeutr','50')
+    cf.param.set_value('flapper.servYawNeutr','50')
+    cf.param.set_value('flapper.flapperMaxThrust','50000')
+    #cf.param.set_value('flapper.rollCut','20')
+    #cf.param.set_value('flapper.pitchCut','20')
+    #cf.param.set_value('flapper.yawCut','5.0')
+    
+    print('Flapper is set up')
+
+def set_PID_gain(cf):
+    
+    # X axis gain
+    cf.param.set_value('posCtlPid.xKp', '1')      # default : 1.5
+    cf.param.set_value('velCtlPid.vxKp', '10')      # default : 25
+    cf.param.set_value('velCtlPid.vxKi', '0.5')     # default : 1
+    cf.param.set_value('velCtlPid.vxKd', '0')       # default : 0
+    cf.param.set_value('velCtlPid.vxKFF', '10')     # default : 10
+
+    # Y axis gain
+    cf.param.set_value('posCtlPid.yKp', '1')      # default : 1.5
+    cf.param.set_value('velCtlPid.vyKp', '10')      # default : 15
+    cf.param.set_value('velCtlPid.vyKi', '0.5')       # default : 1
+    cf.param.set_value('velCtlPid.vyKd', '0')       # default : 0
+    cf.param.set_value('velCtlPid.vyKFF', '5')      # default : 5
+
+    # Z axis gain
+    cf.param.set_value('posCtlPid.zKp', '5')        # default : 5
+    cf.param.set_value('posCtlPid.zKi', '0.5')      # default : 0.5
+    cf.param.set_value('velCtlPid.vzKp', '12.5')    # default : 12.5
+    cf.param.set_value('velCtlPid.vzKi', '0.5')     # default : 0.5
+    
+    # roll gain
+    cf.param.set_value('pid_attitude.roll_kp', '10')  #14
+    cf.param.set_value('pid_attitude.roll_kd', '0')
+    cf.param.set_value('pid_rate.roll_kp', '50')   #50
+    cf.param.set_value('pid_rate.roll_kd', '0')   #0.5
+    cf.param.set_value('pid_rate.omxFiltCut', '12.5')
+    
+    # pitch gain
+    cf.param.set_value('pid_attitude.pitch_kp', '30') #14
+    cf.param.set_value('pid_attitude.pitch_kd', '0')
+    cf.param.set_value('pid_rate.pitch_kp',   '50')   #110
+    cf.param.set_value('pid_rate.pitch_ki',   '0')     #0
+    cf.param.set_value('pid_rate.pitch_kd',   '0')     #2
+    cf.param.set_value('pid_rate.omyFiltCut', '12.5')
+
+    # yaw gain
+    cf.param.set_value('pid_attitude.yaw_kp', '30')
+    cf.param.set_value('pid_attitude.yaw_kd', '0')
+    cf.param.set_value('pid_rate.yaw_kp', '30')
+    cf.param.set_value('pid_rate.yaw_kff', '220')
+    cf.param.set_value('pid_rate.omzFiltCut', '3')
+    
+    print('PID gain is set up')
+
+
+def move_to_center_and_land(cm):
+    # move to center
+    for _ in range(500):
+        cm.send_position_setpoint(0, 0, 1, 0)
+        time.sleep(0.01)
+
+    # landing
+    for _ in range(50):
+        cm.send_position_setpoint(0, 0, 0, 0)
+        time.sleep(0.01) 
+
+def battery_voltage_callback(timestamp, data, logconf):
+    global vbat, thrust
+    vbat = data['flapper.vbat']
+    thrust = 255700 / vbat
+    print(f"battery voltage : {vbat:.2f} V, Updated Thrust : {thrust:.2f}")
+
+def setup_voltage_logger(cf):
+    log_conf = LogConfig(name='Battery', period_in_ms=10)
+    log_conf.add_variable('flapper.vbat','float')
+    cf.log.add_config(log_conf)
+    log_conf.data_received_cb.add_callback(battery_voltage_callback)
+    log_conf.start()
+
+def setup_sweep_cmd(A, omega_min, omega_max):
+    # 파라미터 설정
+    #A = 0.5  # 진폭 (in)
+    #omega_min = 0.5  # 최소 주파수 (r/s)
+    #omega_max = 15   # 최대 주파수 (r/s)
+    C1 = 4.0
+    C2 = 0.0187
+    T_max = 2 * np.pi / omega_min
+    T_min = 2 * np.pi / omega_max
+    T_rec = 5 * T_max
+    dt = 0.001  # 시간 스텝 (s)
+    fade_duration = 5  # fade in/out 시간 (s)
+    trim_duration = 3  # 트림 명령 지속 시간 (s)
+
+    # 시간 벡터 생성
+    t = np.arange(0, T_rec + dt, dt)  # 총 시간 벡터
+
+    # 주파수 진행 계산
+    K = C2 * (np.exp(C1 * t / T_rec) - 1)
+    omega = omega_min + K * (omega_max - omega_min)
+
+    # theta(t) 계산
+    theta = cumtrapz(omega, t, initial=0)  # 누적 적분하여 theta 계산
+
+    # (delta_LON)sweep 신호 생성
+    delta_LON_sweep = A * np.sin(theta)
+
+    # Fade in/out 적용
+    fade_in_length = round(fade_duration / dt)  # fade in 길이 (samples)
+    fade_out_length = round(fade_duration / dt)  # fade out 길이 (samples)
+
+    # Fade in 가중치 생성
+    fade_in = np.linspace(0, 1, fade_in_length)  # 0에서 1로 증가
+
+    # Fade out 가중치 생성
+    fade_out = np.linspace(1, 0, fade_out_length)  # 1에서 0으로 감소
+
+    # 중간의 일정한 가중치
+    constant = np.ones(len(t) - fade_in_length - fade_out_length)
+
+    # 전체 가중치 생성
+    weight = np.concatenate((fade_in, constant, fade_out))
+
+    # 신호에 가중치 적용
+    delta_LON_sweep_faded = delta_LON_sweep * weight
+
+    # 트림 명령 생성 (3초간 0 값)
+    trim_length = round(trim_duration / dt)  # 트림 명령 길이 (samples)
+    trim_signal = np.zeros(trim_length)  # 트림 신호
+
+    # 전체 신호 생성 (트림 명령 + 페이드 적용 신호 + 트림 명령)
+    total_signal = np.concatenate((trim_signal, delta_LON_sweep, trim_signal))
+    total_signal_faded = np.concatenate((trim_signal, delta_LON_sweep_faded, trim_signal))
+
+    total_time = T_rec + dt + 2 * trim_duration
+    time_steps = np.arange(0, total_time, dt)
+
+    return total_signal, total_signal_faded, time_steps
+
+def run_sequence(cf):
+    print('run sequence')
+
+    thrust2 = 1000
+    roll    = 0
+    pitch   = 0
+    yaw     = 0
+
+    roll_cmd    = 0
+    pitch_cmd   = 0
+    yaw_cmd     = 0
+
+    vx = 0
+    vy = 0
+    yawrate     = 0
+    zdistance   = 1
+
+    hi_cm = cf.high_level_commander
+    cm = cf.commander
+
+    A = 8200            # 진폭 (pwm)
+    omega_min = 1    # 최소 주파수 (r/s)
+    omega_max = 40      # 최대 주파수 (r/s)
+
+    total_signal, total_signal_faded, time_steps = setup_sweep_cmd(A, omega_min, omega_max)
+
+    # 1Hz에서 10주기 반복
+    for _ in range(100):
+        cm.send_manual_control(thrust2, 0, 0, 0)
+        time.sleep(0.01)  # 0.01초 대6
+
+    for idx, i in enumerate(time_steps):
+        pitch = total_signal[idx]
+        cm.send_manual_control(thrust2, 0, pitch, 0)
+        time.sleep(0.001)  # 0.01초 대기
+    '''
+    for i in time_steps:
+        pitch = total_signal_faded[i]
+        cm.send_manual_control(thrust2, 0, pitch, 0)
+        time.sleep(0.01)  # 0.01초 대기
+    
+    for _ in range(100):
+        cm.send_manual_control(thrust2, 0, 0, 0)
+        time.sleep(0.01)  # 0.01초 대기    
+    '''
+    for _ in range(100):
+        cm.send_stop_setpoint()
+        time.sleep(0.01)
+
+    time.sleep(1)
+
+if __name__ == '__main__':
+    cflib.crtp.init_drivers()
+
+    with SyncCrazyflie(uri, cf=Crazyflie(rw_cache='./cache')) as scf:
+        cf = scf.cf
+            
+        activate_complementary_estimator(cf)
+        activate_PID_controller(cf)
+        set_Flapper(cf)
+        set_PID_gain(cf)
+
+        #setup_voltage_logger(cf)
+
+        cf.param.set_value('usd.logging', '1')
+        time.sleep(1)
+        run_sequence(cf)
+        cf.param.set_value('usd.logging', '0')
+        time.sleep(1)

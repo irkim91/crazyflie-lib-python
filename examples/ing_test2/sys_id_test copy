@@ -1,0 +1,123 @@
+import logging
+import time
+from threading import Thread
+import numpy as np
+from scipy.integrate import cumtrapz
+
+import cflib
+from cflib.crazyflie import Crazyflie
+from cflib.crazyflie.log import LogConfig
+from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
+from cflib.crazyflie.syncLogger import SyncLogger
+from cflib.utils import uri_helper
+
+uri = uri_helper.uri_from_env(default='radio://0/80/2M/E7E7E7E7E7')
+
+# 로그 설정 (에러만 출력)
+logging.basicConfig(level=logging.ERROR)
+
+def set_param(cf, params):
+    """다수의 파라미터를 한 번에 설정하는 함수"""
+    for param, value in params.items():
+        cf.param.set_value(param, value)
+
+def activate_complementary_estimator(cf):
+    set_param(cf, {'stabilizer.estimator': '1'})
+    print('complementary estimator selected')
+
+def activate_PID_controller(cf):
+    set_param(cf, {'stabilizer.controller': '1'})
+    print('PID controller selected')
+
+def set_Flapper(cf):
+    flapper_params = {
+        'posCtlPid.thrustBase': '0',
+        'flapper.servPitchNeutr': '50',
+        'flapper.servYawNeutr': '50',
+        'flapper.flapperMaxThrust': '50000'
+    }
+    set_param(cf, flapper_params)
+    print('Flapper is set up')
+
+def set_PID_gain(cf):
+    pid_params = {
+        # X, Y, Z 축 PID 게인 설정
+        'posCtlPid.xKp': '1', 'velCtlPid.vxKp': '10', 'velCtlPid.vxKi': '0.5', 'velCtlPid.vxKFF': '10',
+        'posCtlPid.yKp': '1', 'velCtlPid.vyKp': '10', 'velCtlPid.vyKi': '0.5', 'velCtlPid.vyKFF': '5',
+        'posCtlPid.zKp': '5', 'posCtlPid.zKi': '0.5', 'velCtlPid.vzKp': '12.5', 'velCtlPid.vzKi': '0.5',
+        # 롤, 피치, 요 게인 설정
+        'pid_attitude.roll_kp': '10', 'pid_rate.roll_kp': '50', 'pid_rate.omxFiltCut': '12.5',
+        'pid_attitude.pitch_kp': '30', 'pid_rate.pitch_kp': '50', 'pid_rate.omyFiltCut': '12.5',
+        'pid_attitude.yaw_kp': '30', 'pid_rate.yaw_kp': '30', 'pid_rate.yaw_kff': '220', 'pid_rate.omzFiltCut': '3'
+    }
+    set_param(cf, pid_params)
+    print('PID gain is set up')
+
+def setup_sweep_cmd(A, omega_min, omega_max, dt=0.01, fade_duration=5, trim_duration=3):
+    """주파수 스윕 명령을 설정하는 함수"""
+    C1, C2 = 4.0, 0.0187
+    T_rec = 2 * np.pi / omega_min
+    t = np.arange(0, T_rec + dt, dt)
+
+    K = C2 * (np.exp(C1 * t / T_rec) - 1)
+    omega = omega_min + K * (omega_max - omega_min)
+    theta = cumtrapz(omega, t, initial=0)
+    delta_LON_sweep = A * np.sin(theta)
+
+    fade_in_len, fade_out_len = round(fade_duration / dt), round(fade_duration / dt)
+    fade_in, fade_out = np.linspace(0, 1, fade_in_len), np.linspace(1, 0, fade_out_len)
+    constant = np.ones(len(t) - fade_in_len - fade_out_len)
+    weight = np.concatenate((fade_in, constant, fade_out))
+
+    delta_LON_sweep_faded = delta_LON_sweep * weight
+    trim_length = round(trim_duration / dt)
+    trim_signal = np.zeros(trim_length)
+
+    total_signal_faded = np.concatenate((trim_signal, delta_LON_sweep_faded, trim_signal))
+    total_time = T_rec + dt + 2 * trim_duration
+    time_steps = np.arange(0, total_time, dt)
+
+    return total_signal_faded, time_steps
+
+def run_sequence(cf):
+    print('run sequence')
+    cm = cf.commander
+    thrust2 = 1000
+    A, omega_min, omega_max = 6000, 1, 15
+    total_signal_faded, time_steps = setup_sweep_cmd(A, omega_min, omega_max)
+
+    for _ in range(100):
+        cm.send_manual_control(thrust2, 0, 0, 0)
+        time.sleep(0.01)
+
+    for idx, t in enumerate(time_steps):
+        pitch = total_signal_faded[idx]
+        cm.send_manual_control(thrust2, 0, pitch, 0)
+        time.sleep(0.01)
+
+    for _ in range(100):
+        cm.send_manual_control(thrust2, 0, 0, 0)
+        time.sleep(0.01)
+
+    for _ in range(100):
+        cm.send_stop_setpoint()
+        time.sleep(0.01)
+
+    time.sleep(1)
+
+if __name__ == '__main__':
+    cflib.crtp.init_drivers()
+
+    with SyncCrazyflie(uri, cf=Crazyflie(rw_cache='./cache')) as scf:
+        cf = scf.cf
+
+        activate_complementary_estimator(cf)
+        activate_PID_controller(cf)
+        set_Flapper(cf)
+        set_PID_gain(cf)
+
+        cf.param.set_value('usd.logging', '1')
+        time.sleep(1)
+        run_sequence(cf)
+        cf.param.set_value('usd.logging', '0')
+        time.sleep(1)
