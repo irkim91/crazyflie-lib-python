@@ -82,6 +82,10 @@ if __name__ == '__main__':
 
     cf = Crazyflie(rw_cache='./cache')
     with SyncCrazyflie(URI, cf=cf) as scf:
+        # Arm the Crazyflie
+        scf.cf.platform.send_arming_request(True)
+        time.sleep(1.0)
+
         with MotionCommander(scf) as motion_commander:
             with Multiranger(scf) as multiranger:
                 with SyncLogger(scf, lg_stab) as logger:
@@ -118,9 +122,7 @@ if __name__ == '__main__':
                               'yaw_rate', yaw_rate, 'state_wf', state_wf)
 
                         # convert yaw_rate from rad to deg
-                        # the negative sign is because of this ticket:
-                        #    https://github.com/bitcraze/crazyflie-lib-python/issues/389
-                        yaw_rate_deg = -1 * degrees(yaw_rate)
+                        yaw_rate_deg = degrees(yaw_rate)
 
                         motion_commander.start_linear_motion(
                             velocity_x, velocity_y, 0, rate_yaw=yaw_rate_deg)

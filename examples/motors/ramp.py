@@ -27,7 +27,6 @@ the motors and disconnects.
 """
 import logging
 import time
-from threading import Thread
 
 import cflib
 from cflib.crazyflie import Crazyflie
@@ -60,9 +59,9 @@ class MotorRampExample:
         """ This callback is called form the Crazyflie API when a Crazyflie
         has been connected and the TOCs have been downloaded."""
 
-        # Start a separate thread to do the motor test.
-        # Do not hijack the calling thread!
-        Thread(target=self._ramp_motors).start()
+        # Arm the Crazyflie
+        self._cf.platform.send_arming_request(True)
+        time.sleep(1.0)
 
     def _connection_failed(self, link_uri, msg):
         """Callback when connection initial connection fails (i.e no Crazyflie
@@ -78,7 +77,7 @@ class MotorRampExample:
         """Callback when the Crazyflie is disconnected (called in all cases)"""
         print('Disconnected from %s' % link_uri)
 
-    def _ramp_motors(self):
+    def ramp_motors(self):
         thrust_mult = 1
         thrust_step = 500
         thrust = 20000
@@ -95,10 +94,16 @@ class MotorRampExample:
             if thrust >= 25000:
                 thrust_mult = -1
             thrust += thrust_step * thrust_mult
-        self._cf.commander.send_setpoint(0, 0, 0, 0)
-        # Make sure that the last packet leaves before the link is closed
-        # since the message queue is not flushed before closing
-        time.sleep(0.1)
+        for _ in range(30):
+            # Continuously send the zero setpoint until the drone is recognized as landed
+            # to prevent the supervisor from intervening due to missing regular setpoints
+            self._cf.commander.send_setpoint(0, 0, 0, 0)
+            # Sleeping before closing the link makes sure the last
+            # packet leaves before the link is closed, since the
+            # message queue is not flushed before closing
+            time.sleep(0.1)
+
+    def disconnect(self):
         self._cf.close_link()
 
 
@@ -106,4 +111,8 @@ if __name__ == '__main__':
     # Initialize the low-level drivers
     cflib.crtp.init_drivers()
 
-    le = MotorRampExample(uri)
+    me = MotorRampExample(uri)
+
+    me.ramp_motors()
+
+    me.disconnect()

@@ -45,6 +45,7 @@ from cflib.crazyflie.swarm import Swarm
 STEP_TIME = 1
 
 # Possible commands, all times are in seconds
+Arm = namedtuple('Arm', [])
 Takeoff = namedtuple('Takeoff', ['height', 'time'])
 Land = namedtuple('Land', ['time'])
 Goto = namedtuple('Goto', ['x', 'y', 'z', 'time'])
@@ -58,10 +59,15 @@ uris = [
     'radio://0/10/2M/E7E7E7E702',  # cf_id 1, startup position [ 0, 0]
     'radio://0/10/2M/E7E7E7E703',  # cf_id 3, startup position [0.5, 0.5]
     # Add more URIs if you want more copters in the swarm
+    # URIs in a swarm using the same radio must also be on the same channel
 ]
 
 sequence = [
     # Step, CF_id,  action
+    (0,    0,      Arm()),
+    (0,    1,      Arm()),
+    (0,    2,      Arm()),
+
     (0,    0,      Takeoff(0.5, 2)),
     (0,    2,      Takeoff(0.5, 2)),
 
@@ -105,6 +111,11 @@ def activate_mellinger_controller(scf, use_mellinger):
     scf.cf.param.set_value('stabilizer.controller', str(controller))
 
 
+def arm(scf):
+    scf.cf.platform.send_arming_request(True)
+    time.sleep(1.0)
+
+
 def set_ring_color(cf, r, g, b, intensity, time):
     cf.param.set_value('ring.fadeTime', str(time))
 
@@ -133,6 +144,8 @@ def crazyflie_control(scf):
         command = control.get()
         if type(command) is Quit:
             return
+        elif type(command) is Arm:
+            arm(scf)
         elif type(command) is Takeoff:
             commander.takeoff(command.height, command.time)
         elif type(command) is Land:

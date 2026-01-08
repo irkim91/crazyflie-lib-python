@@ -48,6 +48,7 @@ import logging
 import struct
 import sys
 import threading
+from time import time
 
 import numpy as np
 
@@ -182,6 +183,10 @@ class MainWindow(QtWidgets.QWidget):
         else:
             self._imgDownload = ImageDownloader(self.cf.link.cpx, self.updateImage)
             self._imgDownload.start()
+
+            # Arm the Crazyflie
+            self.cf.platform.send_arming_request(True)
+            time.sleep(1.0)
 
             self.hover = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0, 'height': 0.3}
 

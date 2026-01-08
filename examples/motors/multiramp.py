@@ -59,6 +59,10 @@ class MotorRampExample:
         """ This callback is called form the Crazyflie API when a Crazyflie
         has been connected and the TOCs have been downloaded."""
 
+        # Arm the Crazyflie
+        self._cf.platform.send_arming_request(True)
+        time.sleep(1.0)
+
         # Start a separate thread to do the motor test.
         # Do not hijack the calling thread!
         Thread(target=self._ramp_motors).start()
@@ -97,10 +101,14 @@ class MotorRampExample:
             if thrust >= 25000:
                 thrust_mult = -1
             thrust += thrust_step * thrust_mult
-        self._cf.commander.send_setpoint(0, 0, 0, 0)
-        # Make sure that the last packet leaves before the link is closed
-        # since the message queue is not flushed before closing
-        time.sleep(0.1)
+        for _ in range(30):
+            # Continuously send the zero setpoint until the drone is recognized as landed
+            # to prevent the supervisor from intervening due to missing regular setpoints
+            self._cf.commander.send_setpoint(0, 0, 0, 0)
+            time.sleep(0.1)
+        # Sleeping before closing the link makes sure the last
+        # packet leaves before the link is closed, since the
+        # message queue is not flushed before closing
         self._cf.close_link()
 
 

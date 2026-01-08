@@ -130,6 +130,10 @@ class Swarm:
         """
         Return a `dict`, keyed by URI and with the SwarmPosition namedtuples as
         value, with the estimated (x, y, z) of each Crazyflie in the swarm.
+
+        This function is very costly in resources and is not recommended to be
+        used in a loop. To continuously get the position of the Crazyflies, use the
+        start_position_printing() function in the autonomousSequence.py example.
         """
         self.parallel_safe(self.__get_estimated_position)
         return self._positions
@@ -181,7 +185,9 @@ class Swarm:
         Reset estimator on all members of the swarm and wait for a stable
         positions. Blocks until position estimators finds a position.
         """
+        print('Waiting for estimators to find positions...', end='\r')
         self.parallel_safe(self.__reset_estimator)
+        print('Waiting for estimators to find positions...success!')
 
     def sequential(self, func, args_dict=None):
         """

@@ -52,6 +52,7 @@ from cflib.crazyflie.swarm import CachedCfFactory
 from cflib.crazyflie.swarm import Swarm
 
 # Change uris and sequences according to your setup
+# URIs in a swarm using the same radio must also be on the same channel
 URI1 = 'radio://0/70/2M/E7E7E7E701'
 URI2 = 'radio://0/70/2M/E7E7E7E702'
 URI3 = 'radio://0/70/2M/E7E7E7E703'
@@ -171,6 +172,11 @@ def wait_for_param_download(scf):
     print('Parameters downloaded for', scf.cf.link_uri)
 
 
+def arm(scf):
+    scf.cf.platform.send_arming_request(True)
+    time.sleep(1.0)
+
+
 def take_off(cf, position):
     take_off_time = 1.0
     sleep_time = 0.1
@@ -241,5 +247,7 @@ if __name__ == '__main__':
         # flying.
         print('Waiting for parameters to be downloaded...')
         swarm.parallel(wait_for_param_download)
+
+        swarm.parallel(arm)
 
         swarm.parallel(run_sequence, args_dict=seq_args)

@@ -91,7 +91,6 @@ def take_off_simple(scf):
 
 def log_pos_callback(timestamp, data, logconf):
     print(data)
-    global position_estimate
     position_estimate[0] = data['stateEstimate.x']
     position_estimate[1] = data['stateEstimate.y']
 
@@ -124,6 +123,10 @@ if __name__ == '__main__':
         if not deck_attached_event.wait(timeout=5):
             print('No flow deck detected!')
             sys.exit(1)
+
+        # Arm the Crazyflie
+        scf.cf.platform.send_arming_request(True)
+        time.sleep(1.0)
 
         logconf.start()
 

@@ -44,6 +44,11 @@ def light_check(scf: SyncCrazyflie):
     time.sleep(2)
 
 
+def arm(scf: SyncCrazyflie):
+    scf.cf.platform.send_arming_request(True)
+    time.sleep(1.0)
+
+
 def take_off(scf: SyncCrazyflie):
     commander = scf.cf.high_level_commander
 
@@ -85,6 +90,7 @@ uris = [
     'radio://0/20/2M/E7E7E7E703',
     'radio://0/20/2M/E7E7E7E704',
     # Add more URIs if you want more copters in the swarm
+    # URIs in a swarm using the same radio must also be on the same channel
 ]
 
 # The layout of the positions (1m apart from each other):
@@ -161,6 +167,7 @@ if __name__ == '__main__':
         swarm.reset_estimators()
         print('Estimators have been reset')
 
+        swarm.parallel_safe(arm)
         swarm.parallel_safe(take_off)
         # swarm.parallel_safe(run_square_sequence)
         swarm.parallel_safe(run_sequence, args_dict=seq_args)

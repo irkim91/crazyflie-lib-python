@@ -23,7 +23,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 """
-Used for sending high level setpoints to the Crazyflie
+Used for sending high level setpoints to the Crazyflie.
+
+The high level commander generates setpoints from within the firmware
+based on a predefined trajectory. This was merged as part of the
+Crazyswarm project of the USC ACT lab. The high level commander uses a
+planner to generate smooth trajectories based on actions like "take off",
+"go to" or "land" with 7th order polynomials.
 """
 import math
 import struct
@@ -49,6 +55,7 @@ class HighLevelCommander():
     COMMAND_LAND_2 = 8
     COMMAND_SPIRAL = 11
     COMMAND_GO_TO_2 = 12
+    COMMAND_START_TRAJECTORY_2 = 13
 
     ALL_GROUPS = 0
 
@@ -137,7 +144,24 @@ class HighLevelCommander():
     def go_to(self, x, y, z, yaw, duration_s, relative=False, linear=False,
               group_mask=ALL_GROUPS):
         """
-        Go to an absolute or relative position
+        Go to an absolute or relative position.
+
+        The path is designed to transition smoothly from the current
+        state to the target position, gradually decelerating at the
+        goal with minimal overshoot. When the system is at hover, the
+        path will be a straight line, but if there is any initial
+        velocity, the path will be a smooth curve.
+
+        The trajectory is derived by solving for a unique 7th-degree
+        polynomial that satisfies the initial conditions of position,
+        velocity, and acceleration, and ends at the goal with zero
+        velocity and acceleration. Additionally, the jerk (derivative
+        of acceleration) is constrained to be zero at both the starting
+        and ending points.
+
+        Warning! Avoid overlapping go_to commands. When a command is sent to a
+        Crazyflie when another one is currently executed, the generated polynomial
+        can take unexpected routes and have high peaks.
 
         :param x: X (m)
         :param y: Y (m)
@@ -207,8 +231,8 @@ class HighLevelCommander():
                                           ascent,
                                           duration_s))
 
-    def start_trajectory(self, trajectory_id, time_scale=1.0, relative=False,
-                         reversed=False, group_mask=ALL_GROUPS):
+    def start_trajectory(self, trajectory_id, time_scale=1.0, relative_position=False,
+                         relative_yaw=False, reversed=False, group_mask=ALL_GROUPS):
         """
         starts executing a specified trajectory
 
@@ -217,20 +241,35 @@ class HighLevelCommander():
         :param time_scale: Time factor; 1.0 = original speed;
                                         >1.0: slower;
                                         <1.0: faster
-        :param relative: Set to True, if trajectory should be shifted to
+        :param relative_position: Set to True, if trajectory should be shifted to
                current setpoint
+        :param relative_yaw: Set to True, if trajectory should be aligned to
+               current yaw
         :param reversed: Set to True, if trajectory should be executed in
                reverse
         :param group_mask: Mask for which CFs this should apply to
         :return:
         """
-        self._send_packet(struct.pack('<BBBBBf',
-                                      self.COMMAND_START_TRAJECTORY,
-                                      group_mask,
-                                      relative,
-                                      reversed,
-                                      trajectory_id,
-                                      time_scale))
+        if self._cf.platform.get_protocol_version() < 10:
+            if relative_yaw:
+                print('Warning: Relative yaw is not supported in protocol '
+                      'version < 9, update your Crazyflie\'s firmware')
+            self._send_packet(struct.pack('<BBBBBf',
+                                          self.COMMAND_START_TRAJECTORY,
+                                          group_mask,
+                                          relative_position,
+                                          reversed,
+                                          trajectory_id,
+                                          time_scale))
+        else:
+            self._send_packet(struct.pack('<BBBBBBf',
+                                          self.COMMAND_START_TRAJECTORY_2,
+                                          group_mask,
+                                          relative_position,
+                                          relative_yaw,
+                                          reversed,
+                                          trajectory_id,
+                                          time_scale))
 
     def define_trajectory(self, trajectory_id, offset, n_pieces, type=TRAJECTORY_TYPE_POLY4D):
         """
